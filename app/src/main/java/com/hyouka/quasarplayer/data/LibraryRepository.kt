@@ -9,17 +9,21 @@ import com.hyouka.quasarplayer.source.SearchResult
 import com.hyouka.quasarplayer.source.SourceType
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import com.squareup.moshi.adapter
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.io.InputStreamReader
 import java.io.BufferedReader
 import androidx.documentfile.provider.DocumentFile
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import androidx.core.net.toUri
+import androidx.core.content.edit
 
 class LibraryRepository(private val context: Context, private val settingsRepository: com.hyouka.quasarplayer.ui.settings.SettingsRepository) {
     var savedSearchQuery: String = ""
@@ -30,7 +34,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
     var savedSortMode: String
         get() = prefs.getString("sort_mode", "DATE_ADDED") ?: "DATE_ADDED"
         set(value) {
-            prefs.edit().putString("sort_mode", value).apply()
+            prefs.edit { putString("sort_mode", value) }
         }
 
     private val resultsCache = java.util.concurrent.ConcurrentHashMap<Pair<SourceType, String>, List<SearchResult>>()
@@ -57,7 +61,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         private set
 
     init {
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             settingsRepository.musicFolderFlow.collect { folder ->
                 currentMusicFolder = folder
             }
@@ -67,7 +71,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
     fun getMusicDirDocument(): DocumentFile? {
         val folderStr = currentMusicFolder
         return if (folderStr.startsWith("content://")) {
-            DocumentFile.fromTreeUri(context, Uri.parse(folderStr))
+            DocumentFile.fromTreeUri(context, folderStr.toUri())
         } else {
             val file = File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
@@ -164,7 +168,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
                         val mediaStoreDuration = cursor.getLong(durationCol)
                         
                         val finalTitle = cached?.title ?: mediaStoreTitle ?: "Unknown Title"
-                        val finalArtist = if (!cached?.artist.isNullOrBlank() && cached?.artist != "<unknown>") {
+                        val finalArtist = if (!cached?.artist.isNullOrBlank() && cached.artist != "<unknown>") {
                             cached.artist
                         } else if (!mediaStoreArtist.isNullOrBlank() && mediaStoreArtist != "<unknown>") {
                             mediaStoreArtist
@@ -196,7 +200,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
 
         for ((id, cachedTrack) in cachedIndex) {
             if (!scannedTracksMap.containsKey(id)) {
-                val uri = Uri.parse(cachedTrack.uri)
+                val uri = cachedTrack.uri.toUri()
                 if (uri.scheme == "content" && DocumentFile.isDocumentUri(context, uri)) {
                     if (DocumentFile.fromSingleUri(context, uri)?.exists() == true) {
                         scannedTracksMap[id] = cachedTrack
@@ -216,7 +220,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
             if (!artPath.isNullOrBlank() && File(artPath).exists()) continue
 
             try {
-                retriever.setDataSource(context, Uri.parse(track.uri))
+                retriever.setDataSource(context, track.uri.toUri())
                 val picture = retriever.embeddedPicture
                 val artDir = File(context.filesDir, "artworks").apply { mkdirs() }
                 val artFile = File(artDir, "${track.id}.jpg")
@@ -232,7 +236,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
                 e.printStackTrace()
             }
         }
-        try { retriever.release() } catch (e: Exception) {}
+        try { retriever.release() } catch (_: Exception) {}
 
         val resultList = scannedTracksMap.values
             .associateBy { it.uri }.values
@@ -243,8 +247,8 @@ class LibraryRepository(private val context: Context, private val settingsReposi
 
     fun generateStableId(rawUriOrPath: String): String {
         val path = try {
-            Uri.parse(rawUriOrPath).path ?: rawUriOrPath
-        } catch (e: Exception) {
+            rawUriOrPath.toUri().path ?: rawUriOrPath
+        } catch (_: Exception) {
             rawUriOrPath
         }
         val filename = File(path).name.lowercase().trim()
@@ -269,7 +273,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
     }
 
     fun deleteTrack(track: Track) {
-        val uri = Uri.parse(track.uri)
+        val uri = track.uri.toUri()
 
         if (uri.scheme == "file" || track.uri.startsWith("/")) {
             val path = uri.path ?: track.uri
@@ -294,12 +298,10 @@ class LibraryRepository(private val context: Context, private val settingsReposi
 
         try {
             val root = getMusicDirDocument()
-            if (root != null) {
-                root.listFiles().forEach { f ->
-                    val nameWithoutExt = f.name?.substringBeforeLast(".") ?: ""
-                    if (nameWithoutExt.equals(track.title.replace(Regex("[^A-Za-z0-9 _-]"), "_").trim(), ignoreCase = true)) {
-                        f.delete()
-                    }
+            root?.listFiles()?.forEach { f ->
+                val nameWithoutExt = f.name?.substringBeforeLast(".") ?: ""
+                if (nameWithoutExt.equals(track.title.replace(Regex("[^A-Za-z0-9 _-]"), "_").trim(), ignoreCase = true)) {
+                    f.delete()
                 }
             }
         } catch (e: Exception) {
@@ -312,7 +314,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
 
         val playlists = listPlaylists()
         for (playlist in playlists) {
-            if (playlist.trackIds.remove(track.id)) {
+            if (playlist.trackIds.removeAll { it == track.id }) {
                 savePlaylist(playlist)
             }
         }
@@ -322,7 +324,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         if (!indexFile.exists()) return emptyList()
         return try {
             trackListAdapter.fromJson(indexFile.readText()) ?: emptyList()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -331,7 +333,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         val tracks = loadCachedIndex().toList()
         var brokenCount = 0
         for (track in tracks) {
-            val uri = Uri.parse(track.uri)
+            val uri = track.uri.toUri()
             var isBroken = false
 
             if (uri.scheme == "file" || track.uri.startsWith("/")) {
@@ -354,7 +356,7 @@ class LibraryRepository(private val context: Context, private val settingsReposi
                     val retriever = android.media.MediaMetadataRetriever()
                     retriever.setDataSource(context, uri)
                     retriever.release()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     isBroken = true
                 }
             }
@@ -367,49 +369,169 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         brokenCount
     }
 
+    private fun openPlaylistInputStream(uri: Uri): InputStream? {
+        return try {
+            if (uri.scheme == "file" || (uri.scheme == null && uri.path?.startsWith("/") == true)) {
+                val path = uri.path ?: uri.toString()
+                val f = File(path)
+                if (f.exists()) FileInputStream(f) else null
+            } else {
+                context.contentResolver.openInputStream(uri)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun openPlaylistOutputStream(uri: Uri): OutputStream? {
+        return try {
+            if (uri.scheme == "file" || (uri.scheme == null && uri.path?.startsWith("/") == true)) {
+                val path = uri.path ?: uri.toString()
+                val f = File(path)
+                FileOutputStream(f)
+            } else {
+                context.contentResolver.openOutputStream(uri)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
     fun listPlaylists(): List<Playlist> {
         val pDir = getPlaylistDirDocument() ?: return emptyList()
         val files = pDir.listFiles().filter { it.name?.endsWith(".m3u") == true }
         
         return files.mapNotNull { file ->
             try {
-                context.contentResolver.openInputStream(file.uri)?.use { stream ->
+                val curName = file.name ?: ""
+                val actualFile = if (curName.endsWith(".m3u.m3u")) {
+                    val fixedName = curName.removeSuffix(".m3u")
+                    if (file.renameTo(fixedName)) {
+                        pDir.findFile(fixedName) ?: file
+                    } else file
+                } else {
+                    file
+                }
+
+                openPlaylistInputStream(actualFile.uri)?.use { stream ->
                     val reader = BufferedReader(InputStreamReader(stream))
                     val lines = reader.readLines()
                     if (lines.size >= 2) {
-                        val name = lines[0]
-                        val trackIds = if (lines.size > 2) lines.subList(2, lines.size).toMutableList() else mutableListOf()
-                        Playlist(name = name, created = file.lastModified(), trackIds = trackIds)
-                    } else null
+                        val name = lines[0].removeSuffix(".m3u").trim()
+                        val rawTrackIds = if (lines.size > 2) lines.subList(2, lines.size) else emptyList()
+                        val trackIds = rawTrackIds
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                            .toMutableList()
+                        Playlist(
+                            name = name.ifEmpty { "Playlist" },
+                            created = actualFile.lastModified(),
+                            trackIds = trackIds,
+                            uri = actualFile.uri.toString()
+                        )
+                    } else if (lines.size == 1) {
+                        val name = lines[0].removeSuffix(".m3u").trim()
+                        Playlist(
+                            name = name.ifEmpty { "Playlist" },
+                            created = actualFile.lastModified(),
+                            trackIds = mutableListOf(),
+                            uri = actualFile.uri.toString()
+                        )
+                    } else run {
+                        val fallbackName = (actualFile.name ?: "Playlist").removeSuffix(".m3u").removeSuffix(".m3u").trim()
+                        Playlist(
+                            name = fallbackName.ifEmpty { "Playlist" },
+                            created = actualFile.lastModified(),
+                            trackIds = mutableListOf(),
+                            uri = actualFile.uri.toString()
+                        )
+                    }
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }.sortedByDescending { it.created }
     }
 
+    fun addTrackToPlaylist(playlist: Playlist, trackId: String): Boolean {
+        if (playlist.trackIds.contains(trackId)) {
+            return false
+        }
+        playlist.trackIds.add(trackId)
+        savePlaylist(playlist)
+        return true
+    }
+
+    fun addTracksToPlaylist(playlist: Playlist, trackIds: Collection<String>): Int {
+        val toAdd = trackIds.filterNot { playlist.trackIds.contains(it) }.distinct()
+        if (toAdd.isEmpty()) return 0
+        playlist.trackIds.addAll(toAdd)
+        savePlaylist(playlist)
+        return toAdd.size
+    }
+
     fun savePlaylist(playlist: Playlist) {
         val pDir = getPlaylistDirDocument() ?: return
-        val sanitizedName = playlist.name.replace(Regex("[\\\\/:*?\"<>|\\x00]"), "_").trim()
-        val fileName = "$sanitizedName.m3u"
+        val cleanName = playlist.name.removeSuffix(".m3u").trim()
+        val sanitizedName = cleanName.replace(Regex("[\\\\/:*?\"<>|\\x00]"), "_").trim().ifEmpty { "Playlist" }
+        val targetFileName = "$sanitizedName.m3u"
         
-        var file = pDir.findFile(fileName)
+        var file = pDir.findFile(targetFileName)
         if (file == null) {
-            file = pDir.createFile("audio/x-mpegurl", fileName)
+            file = pDir.findFile("$targetFileName.m3u")
+            if (file != null) {
+                if (file.renameTo(targetFileName)) {
+                    file = pDir.findFile(targetFileName) ?: file
+                }
+            }
+        }
+
+        if (file == null) {
+            file = if (!currentMusicFolder.startsWith("content://")) {
+                val pFile = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "QuasarPlayer/playlists"
+                ).apply { mkdirs() }
+                val targetFile = File(pFile, targetFileName)
+                if (!targetFile.exists()) {
+                    targetFile.createNewFile()
+                }
+                DocumentFile.fromFile(targetFile)
+            } else {
+                val created = pDir.createFile("audio/x-mpegurl", sanitizedName)
+                if (created != null && created.name?.endsWith(".m3u.m3u") == true) {
+                    if (created.renameTo(targetFileName)) {
+                        pDir.findFile(targetFileName) ?: created
+                    } else created
+                } else created
+            }
         }
         if (file == null) return
         
+        // Ensure track IDs are deduplicated and clean before saving
+        val distinctTrackIds = playlist.trackIds
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toMutableList()
+        playlist.trackIds.clear()
+        playlist.trackIds.addAll(distinctTrackIds)
+
         val allTracks = loadCachedIndex().associateBy { it.id }
         val totalSeconds = playlist.trackIds.sumOf { allTracks[it]?.durationMs ?: 0L } / 1000L
 
         try {
-            context.contentResolver.openOutputStream(file.uri)?.use { stream ->
+            openPlaylistOutputStream(file.uri)?.use { stream ->
                 stream.bufferedWriter().use { out ->
-                    out.write(playlist.name + "\n")
+                    out.write(sanitizedName + "\n")
                     out.write(totalSeconds.toString() + "\n")
                     playlist.trackIds.forEach { trackId ->
                         out.write(trackId + "\n")
                     }
+                    out.flush()
                 }
             }
         } catch (e: Exception) {
@@ -417,9 +539,57 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         }
     }
 
+    fun deletePlaylist(playlist: Playlist) {
+        if (!playlist.uri.isNullOrEmpty()) {
+            val uri = playlist.uri.toUri()
+            try {
+                if (uri.scheme == "file" || playlist.uri.startsWith("/")) {
+                    val path = uri.path ?: playlist.uri
+                    val f = File(path)
+                    if (f.exists()) f.delete()
+                } else if (uri.scheme == "content") {
+                    if (DocumentFile.isDocumentUri(context, uri) || playlist.uri.contains("document")) {
+                        DocumentFile.fromSingleUri(context, uri)?.delete()
+                    } else {
+                        context.contentResolver.delete(uri, null, null)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        deletePlaylist(playlist.name)
+    }
+
     fun deletePlaylist(name: String) {
-        val sanitizedName = name.replace(Regex("[\\\\/:*?\"<>|\\x00]"), "_").trim()
+        val cleanName = name.removeSuffix(".m3u").trim()
+        val sanitizedName = cleanName.replace(Regex("[\\\\/:*?\"<>|\\x00]"), "_").trim()
         val pDir = getPlaylistDirDocument() ?: return
-        pDir.findFile("$sanitizedName.m3u")?.delete()
+
+        if (!currentMusicFolder.startsWith("content://")) {
+            val pDirFile = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                "QuasarPlayer/playlists"
+            )
+            File(pDirFile, "$sanitizedName.m3u").delete()
+            File(pDirFile, "$sanitizedName.m3u.m3u").delete()
+            File(pDirFile, name).delete()
+        }
+
+        try {
+            pDir.listFiles().forEach { file ->
+                val fname = file.name ?: ""
+                val fnameClean = fname.removeSuffix(".m3u").removeSuffix(".m3u").trim()
+                if (fname.equals("$sanitizedName.m3u", ignoreCase = true) ||
+                    fname.equals("$sanitizedName.m3u.m3u", ignoreCase = true) ||
+                    fname.equals(name, ignoreCase = true) ||
+                    fnameClean.equals(sanitizedName, ignoreCase = true)
+                ) {
+                    file.delete()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

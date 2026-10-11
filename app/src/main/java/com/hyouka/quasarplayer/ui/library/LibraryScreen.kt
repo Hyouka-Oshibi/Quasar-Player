@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,6 +12,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -66,7 +66,7 @@ fun LibraryScreen(
         mutableStateOf(
             try { 
                 SortMode.valueOf(libraryRepository.savedSortMode) 
-            } catch (e: Exception) { 
+            } catch (_: Exception) {
                 SortMode.DATE_ADDED 
             }
         ) 
@@ -371,7 +371,7 @@ fun LibraryScreen(
                                 ListItem(
                                     headlineContent = { Text(playlist.name) },
                                     supportingContent = { Text(subtitleText) },
-                                    leadingContent = { Icon(Icons.Default.QueueMusic, contentDescription = null) },
+                                    leadingContent = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
                                     trailingContent = {
                                         IconButton(onClick = {
                                             playlistToDelete = playlist
@@ -402,7 +402,7 @@ fun LibraryScreen(
     // Playlist Detail & Editing Bottom Sheet
     playlistForDetailSheet?.let { activePlaylist ->
         var playlistTracks by remember(activePlaylist.trackIds, tracks) {
-            mutableStateOf(activePlaylist.trackIds.mapNotNull { id -> tracks.find { it.id == id } })
+            mutableStateOf(activePlaylist.trackIds.distinct().mapNotNull { id -> tracks.find { it.id == id } })
         }
         val totalDurationMs = playlistTracks.sumOf { it.durationMs }
         val durationText = formatPlaylistDuration(totalDurationMs)
@@ -415,10 +415,12 @@ fun LibraryScreen(
         })
 
         val saveAndDismiss = {
-            activePlaylist.trackIds.clear()
-            activePlaylist.trackIds.addAll(playlistTracks.map { it.id })
-            libraryRepository.savePlaylist(activePlaylist)
-            refreshLibrary()
+            scope.launch(Dispatchers.IO) {
+                activePlaylist.trackIds.clear()
+                activePlaylist.trackIds.addAll(playlistTracks.map { it.id }.distinct())
+                libraryRepository.savePlaylist(activePlaylist)
+                refreshLibrary()
+            }
             playlistForDetailSheet = null
         }
 
@@ -640,8 +642,10 @@ fun LibraryScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        libraryRepository.deletePlaylist(targetPlaylist.name)
-                        refreshLibrary()
+                        scope.launch(Dispatchers.IO) {
+                            libraryRepository.deletePlaylist(targetPlaylist)
+                            refreshLibrary()
+                        }
                         playlistToDelete = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -703,12 +707,18 @@ fun LibraryScreen(
                         playlists.forEach { playlist ->
                             TextButton(
                                 onClick = {
-                                    val newTrackIds = selectedTrackIds.filterNot { playlist.trackIds.contains(it) }
-                                    if (newTrackIds.isNotEmpty()) {
-                                        playlist.trackIds.addAll(newTrackIds)
-                                        libraryRepository.savePlaylist(playlist)
-                                        Toast.makeText(context, "Added ${newTrackIds.size} tracks to ${playlist.name}", Toast.LENGTH_SHORT).show()
-                                        refreshLibrary()
+                                    val targets = selectedTrackIds.toList()
+                                    val countToAdd = targets.count { !playlist.trackIds.contains(it) }
+                                    if (countToAdd == 0) {
+                                        Toast.makeText(context, "Selected track(s) already in ${playlist.name}", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        scope.launch(Dispatchers.IO) {
+                                            val added = libraryRepository.addTracksToPlaylist(playlist, targets)
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(context, "Added $added track(s) to ${playlist.name}", Toast.LENGTH_SHORT).show()
+                                                refreshLibrary()
+                                            }
+                                        }
                                     }
                                     showBatchAddToPlaylistDialog = false
                                     isSelectionMode = false
@@ -748,11 +758,14 @@ fun LibraryScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (playlistName.isNotBlank()) {
-                            libraryRepository.savePlaylist(
-                                Playlist(name = playlistName.trim(), created = System.currentTimeMillis())
-                            )
-                            refreshLibrary()
+                        val cleanName = playlistName.trim().removeSuffix(".m3u").trim()
+                        if (cleanName.isNotBlank()) {
+                            scope.launch(Dispatchers.IO) {
+                                libraryRepository.savePlaylist(
+                                    Playlist(name = cleanName, created = System.currentTimeMillis())
+                                )
+                                refreshLibrary()
+                            }
                             showCreatePlaylistDialog = false
                         }
                     }
@@ -770,6 +783,7 @@ fun LibraryScreen(
 
     // Add Single Track to Playlist Dialog
     showAddToPlaylistDialog?.let { targetTrack ->
+        val trackId = targetTrack.id
         AlertDialog(
             onDismissRequest = { showAddToPlaylistDialog = null },
             title = { Text("Select Playlist") },
@@ -781,11 +795,20 @@ fun LibraryScreen(
                         playlists.forEach { playlist ->
                             TextButton(
                                 onClick = {
-                                    if (!playlist.trackIds.contains(targetTrack.id)) {
-                                        playlist.trackIds.add(targetTrack.id)
-                                        libraryRepository.savePlaylist(playlist)
-                                        Toast.makeText(context, "Added to ${playlist.name}", Toast.LENGTH_SHORT).show()
-                                        refreshLibrary()
+                                    if (playlist.trackIds.contains(trackId)) {
+                                        Toast.makeText(context, "Track already in ${playlist.name}", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        scope.launch(Dispatchers.IO) {
+                                            val added = libraryRepository.addTrackToPlaylist(playlist, trackId)
+                                            withContext(Dispatchers.Main) {
+                                                if (added) {
+                                                    Toast.makeText(context, "Added to ${playlist.name}", Toast.LENGTH_SHORT).show()
+                                                    refreshLibrary()
+                                                } else {
+                                                    Toast.makeText(context, "Track already in ${playlist.name}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
                                     }
                                     showAddToPlaylistDialog = null
                                 },
