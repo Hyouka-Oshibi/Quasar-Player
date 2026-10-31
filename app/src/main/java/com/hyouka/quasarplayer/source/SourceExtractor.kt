@@ -92,14 +92,15 @@ class SourceExtractor(private val context: Context) {
                     val req = okhttp3.Request.Builder()
                         .url("https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json")
                         .build()
-                    val res = client.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val body = res.body?.string()
-                        if (body != null) {
-                            val map = moshi.adapter(Map::class.java).fromJson(body) as? Map<*, *>
-                            if (map != null) {
-                                title = map["title"]?.toString() ?: title
-                                author = map["author_name"]?.toString() ?: author
+                    client.newCall(req).execute().use { res ->
+                        if (res.isSuccessful) {
+                            val body = res.body?.string()
+                            if (body != null) {
+                                val map = moshi.adapter(Map::class.java).fromJson(body) as? Map<*, *>
+                                if (map != null) {
+                                    title = map["title"]?.toString() ?: title
+                                    author = map["author_name"]?.toString() ?: author
+                                }
                             }
                         }
                     }
@@ -127,8 +128,9 @@ class SourceExtractor(private val context: Context) {
                 var finalUrl = trimmed.replace("m.soundcloud.com", "soundcloud.com")
                 if (finalUrl.contains("on.soundcloud.com")) {
                     val redirectReq = okhttp3.Request.Builder().url(finalUrl).head().build()
-                    val redirectRes = client.newCall(redirectReq).execute()
-                    finalUrl = redirectRes.request.url.toString().replace("m.soundcloud.com", "soundcloud.com")
+                    client.newCall(redirectReq).execute().use { redirectRes ->
+                        finalUrl = redirectRes.request.url.toString().replace("m.soundcloud.com", "soundcloud.com")
+                    }
                 }
 
                 val clientId = getSoundCloudClientId(client)
@@ -142,17 +144,18 @@ class SourceExtractor(private val context: Context) {
                         .build()
 
                     val req = okhttp3.Request.Builder().url(resolveUrl).build()
-                    val res = client.newCall(req).execute()
-                    if (res.isSuccessful) {
-                        val body = res.body?.string()
-                        if (body != null) {
-                            val map = moshi.adapter(Map::class.java).fromJson(body) as? Map<*, *>
-                            if (map != null) {
-                                title = map["title"]?.toString() ?: title
-                                val user = map["user"] as? Map<*, *>
-                                author = user?.get("username")?.toString() ?: author
-                                thumb = map["artwork_url"]?.toString()?.replace("-large", "-t500x500") ?: thumb
-                                duration = (map["duration"] as? Number)?.toLong() ?: 0L
+                    client.newCall(req).execute().use { res ->
+                        if (res.isSuccessful) {
+                            val body = res.body?.string()
+                            if (body != null) {
+                                val map = moshi.adapter(Map::class.java).fromJson(body) as? Map<*, *>
+                                if (map != null) {
+                                    title = map["title"]?.toString() ?: title
+                                    val user = map["user"] as? Map<*, *>
+                                    author = user?.get("username")?.toString() ?: author
+                                    thumb = map["artwork_url"]?.toString()?.replace("-large", "-t500x500") ?: thumb
+                                    duration = (map["duration"] as? Number)?.toLong() ?: 0L
+                                }
                             }
                         }
                     }
@@ -194,8 +197,9 @@ class SourceExtractor(private val context: Context) {
 
         val results = mutableListOf<SearchResult>()
         try {
-            val response = client.newCall(request).execute()
-            val jsonResponse = response.body?.string() ?: return@withContext emptyList()
+            val jsonResponse = client.newCall(request).execute().use { response ->
+                response.body?.string()
+            } ?: return@withContext emptyList()
             
             val mapAdapter = moshi.adapter(Map::class.java)
             val map = mapAdapter.fromJson(jsonResponse) as? Map<*, *> ?: return@withContext emptyList()
@@ -276,7 +280,7 @@ class SourceExtractor(private val context: Context) {
         scClientId?.let { return it }
         try {
             val req = okhttp3.Request.Builder().url("https://soundcloud.com").build()
-            val html = client.newCall(req).execute().body?.string() ?: return null
+            val html = client.newCall(req).execute().use { it.body?.string() } ?: return null
             
             val jsPattern = Regex("""<script crossorigin src="(https://a-v2\.sndcdn\.com/assets/.*?.js)"></script>""")
             val matches = jsPattern.findAll(html).toList()
@@ -284,7 +288,7 @@ class SourceExtractor(private val context: Context) {
             for (match in matches) {
                 val jsUrl = match.groupValues[1]
                 val jsReq = okhttp3.Request.Builder().url(jsUrl).build()
-                val jsContent = client.newCall(jsReq).execute().body?.string() ?: continue
+                val jsContent = client.newCall(jsReq).execute().use { it.body?.string() } ?: continue
                 
                 val idMatch = Regex("""client_id:"([^"]+)"""").find(jsContent)
                 if (idMatch != null) {
@@ -316,8 +320,9 @@ class SourceExtractor(private val context: Context) {
         val results = mutableListOf<SearchResult>()
         
         try {
-            val response = client.newCall(request).execute()
-            val jsonResponse = response.body?.string() ?: return@withContext emptyList()
+            val jsonResponse = client.newCall(request).execute().use { response ->
+                response.body?.string()
+            } ?: return@withContext emptyList()
             
             val mapAdapter = moshi.adapter(Map::class.java)
             val map = mapAdapter.fromJson(jsonResponse) as? Map<*, *> ?: return@withContext emptyList()

@@ -47,6 +47,13 @@ fun PreviewSheet(
 
     // Resolve stream info and setup throwaway ExoPlayer
     LaunchedEffect(searchResult) {
+        exoPlayer?.stop()
+        exoPlayer?.release()
+        exoPlayer = null
+        isLoadingStream = true
+        isPlaying = false
+        currentPositionMs = 0L
+
         withContext(Dispatchers.IO) {
             val resolved = sourceExtractor.getStreamInfo(searchResult)
             withContext(Dispatchers.Main) {

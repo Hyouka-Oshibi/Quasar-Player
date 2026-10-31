@@ -3,6 +3,7 @@ package com.hyouka.quasarplayer.playback
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import androidx.core.net.toUri
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -163,9 +164,9 @@ class PlayerController(private val context: Context) {
     private fun parseUri(raw: String): Uri {
         val trimmed = raw.trim()
         return when {
-            trimmed.startsWith("content://") || trimmed.startsWith("file://") || trimmed.startsWith("http://") || trimmed.startsWith("https://") -> Uri.parse(trimmed)
+            trimmed.startsWith("content://") || trimmed.startsWith("file://") || trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed.toUri()
             trimmed.startsWith("/") -> Uri.fromFile(File(trimmed))
-            else -> Uri.parse(trimmed)
+            else -> trimmed.toUri()
         }
     }
 
@@ -200,7 +201,9 @@ class PlayerController(private val context: Context) {
 
     fun skipToPrevious() {
         val controller = mediaController ?: return
-        if (controller.hasPreviousMediaItem()) {
+        if (controller.currentPosition > 3000L) {
+            controller.seekTo(0L)
+        } else if (controller.hasPreviousMediaItem()) {
             controller.seekToPreviousMediaItem()
         } else {
             controller.seekTo(0L)

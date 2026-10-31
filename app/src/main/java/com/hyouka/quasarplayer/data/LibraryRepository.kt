@@ -223,23 +223,33 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         val retriever = android.media.MediaMetadataRetriever()
         for ((id, track) in scannedTracksMap) {
             val artPath = track.artworkPath
-            if (!artPath.isNullOrBlank() && File(artPath).exists()) continue
+            if (!artPath.isNullOrBlank()) {
+                val artFile = File(artPath)
+                if (artFile.exists()) {
+                    if (artFile.length() > 0L) {
+                        continue
+                    } else {
+                        artFile.delete()
+                    }
+                }
+            }
+            if (cachedIndex[id]?.hasEmbeddedArt == false && cachedIndex[id]?.artworkPath == null) {
+                continue
+            }
 
             try {
                 retriever.setDataSource(context, track.uri.toUri())
                 val picture = retriever.embeddedPicture
-                val artDir = File(context.filesDir, "artworks").apply { mkdirs() }
-                val artFile = File(artDir, "${track.id}.jpg")
-
-                if (picture != null) {
+                if (picture != null && picture.isNotEmpty()) {
+                    val artDir = File(context.filesDir, "artworks").apply { mkdirs() }
+                    val artFile = File(artDir, "${track.id}.jpg")
                     artFile.writeBytes(picture)
                     scannedTracksMap[id] = track.copy(artworkPath = artFile.absolutePath, hasEmbeddedArt = true)
                 } else {
-                    artFile.createNewFile()
-                    scannedTracksMap[id] = track.copy(artworkPath = artFile.absolutePath, hasEmbeddedArt = false)
+                    scannedTracksMap[id] = track.copy(artworkPath = null, hasEmbeddedArt = false)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                scannedTracksMap[id] = track.copy(artworkPath = null, hasEmbeddedArt = false)
             }
         }
         try { retriever.release() } catch (_: Exception) {}
@@ -251,15 +261,19 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         resultList
     }
 
-    fun generateStableId(rawUriOrPath: String): String {
-        val path = try {
-            rawUriOrPath.toUri().path ?: rawUriOrPath
-        } catch (_: Exception) {
-            rawUriOrPath
+    fun generateStableId(rawUriOrPath: String): String = Companion.generateStableId(rawUriOrPath)
+
+    companion object {
+        fun generateStableId(rawUriOrPath: String): String {
+            val path = try {
+                rawUriOrPath.toUri().path ?: rawUriOrPath
+            } catch (_: Exception) {
+                rawUriOrPath
+            }
+            val filename = File(path).name.lowercase().trim()
+            val digest = MessageDigest.getInstance("SHA-256").digest(filename.toByteArray())
+            return digest.joinToString("") { "%02x".format(it) }.take(12)
         }
-        val filename = File(path).name.lowercase().trim()
-        val digest = MessageDigest.getInstance("SHA-256").digest(filename.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }.take(12)
     }
 
     private val trackListAdapter

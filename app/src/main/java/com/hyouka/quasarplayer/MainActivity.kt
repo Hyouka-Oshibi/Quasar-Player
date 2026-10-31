@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,6 +66,64 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var sourceExtractor: SourceExtractor
     private lateinit var downloader: Downloader
+    private val pendingRoute = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: android.content.Intent?) {
+        if (intent == null) return
+        val action = intent.action
+        val data = intent.data
+        if (action == android.content.Intent.ACTION_VIEW && data != null) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val track = resolveTrackFromUri(data)
+                if (track != null) {
+                    withContext(Dispatchers.Main) {
+                        playerController.playTrackList(listOf(track), 0)
+                        pendingRoute.value = Destination.Playing.route
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveTrackFromUri(uri: android.net.Uri): com.hyouka.quasarplayer.data.Track? {
+        return try {
+            var title = "External Track"
+            val artist = "External Audio"
+
+            if (uri.scheme == "content") {
+                val cursor = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex != -1) {
+                            title = it.getString(nameIndex) ?: title
+                        }
+                    }
+                }
+            } else if (uri.scheme == "file" || uri.path?.startsWith("/") == true) {
+                val path = uri.path ?: uri.toString()
+                title = java.io.File(path).name
+            }
+
+            val cleanTitle = title.substringBeforeLast('.')
+            com.hyouka.quasarplayer.data.Track(
+                id = libraryRepository.generateStableId(uri.toString()),
+                uri = uri.toString(),
+                title = cleanTitle.ifBlank { "External Audio" },
+                artist = artist,
+                durationMs = 0L
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
@@ -77,6 +136,8 @@ class MainActivity : ComponentActivity() {
         playerController = PlayerController(applicationContext)
         sourceExtractor = SourceExtractor(applicationContext)
         downloader = Downloader(applicationContext, libraryRepository, sourceExtractor, settingsRepository)
+
+        handleIntent(intent)
 
         setContent {
             val themeState by settingsRepository.themeFlow.collectAsState(initial = null)
@@ -118,7 +179,9 @@ class MainActivity : ComponentActivity() {
                     playerController = playerController,
                     settingsRepository = settingsRepository,
                     sourceExtractor = sourceExtractor,
-                    downloader = downloader
+                    downloader = downloader,
+                    pendingRoute = pendingRoute,
+                    onRouteHandled = { pendingRoute.value = null }
                 )
             }
         }
@@ -164,10 +227,24 @@ private fun AppScaffold(
     playerController: PlayerController,
     settingsRepository: SettingsRepository,
     sourceExtractor: SourceExtractor,
-    downloader: Downloader
+    downloader: Downloader,
+    pendingRoute: kotlinx.coroutines.flow.StateFlow<String?>,
+    onRouteHandled: () -> Unit
 ) {
     val navController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
+    val targetRoute by pendingRoute.collectAsState()
+
+    LaunchedEffect(targetRoute) {
+        targetRoute?.let { route ->
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            onRouteHandled()
+        }
+    }
 
     Scaffold(
         bottomBar = {

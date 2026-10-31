@@ -1,6 +1,7 @@
 package com.hyouka.quasarplayer.playback
 
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -16,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
@@ -115,14 +117,52 @@ class PlaybackService : MediaSessionService() {
             }
             return Futures.immediateFuture(resolvedItems)
         }
+
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val player = mediaSession.player
+            if (player.mediaItemCount > 0) {
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(
+                        (0 until player.mediaItemCount).map { player.getMediaItemAt(it) },
+                        player.currentMediaItemIndex,
+                        player.currentPosition
+                    )
+                )
+            }
+            val cachedTracks = com.hyouka.quasarplayer.data.LibraryRepository(
+                this@PlaybackService,
+                SettingsRepository(this@PlaybackService)
+            ).loadCachedIndex()
+            if (cachedTracks.isNotEmpty()) {
+                val items = cachedTracks.map { track ->
+                    val uri = parseUri(track.uri)
+                    val metadata = androidx.media3.common.MediaMetadata.Builder()
+                        .setTitle(track.title)
+                        .setArtist(track.artist ?: "Unknown Artist")
+                        .build()
+                    MediaItem.Builder()
+                        .setMediaId(track.id)
+                        .setUri(uri)
+                        .setMediaMetadata(metadata)
+                        .build()
+                }
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(items, 0, 0L)
+                )
+            }
+            return super.onPlaybackResumption(mediaSession, controller)
+        }
     }
 
     private fun parseUri(raw: String): Uri {
         val trimmed = raw.trim()
         return when {
-            trimmed.startsWith("content://") || trimmed.startsWith("file://") || trimmed.startsWith("http://") || trimmed.startsWith("https://") -> Uri.parse(trimmed)
+            trimmed.startsWith("content://") || trimmed.startsWith("file://") || trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed.toUri()
             trimmed.startsWith("/") -> Uri.fromFile(File(trimmed))
-            else -> Uri.parse(trimmed)
+            else -> trimmed.toUri()
         }
     }
 

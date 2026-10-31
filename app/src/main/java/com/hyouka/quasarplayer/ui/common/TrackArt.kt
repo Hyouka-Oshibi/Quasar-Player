@@ -3,6 +3,7 @@ package com.hyouka.quasarplayer.ui.common
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.core.net.toUri
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -81,7 +82,7 @@ fun TrackArt(
                     value = withContext(Dispatchers.IO) {
                         try {
                             val retriever = MediaMetadataRetriever()
-                            val uri = Uri.parse(track.uri)
+                            val uri = track.uri.toUri()
                             if (uri.scheme == "content" || uri.scheme == "file") {
                                 retriever.setDataSource(context, uri)
                             } else {

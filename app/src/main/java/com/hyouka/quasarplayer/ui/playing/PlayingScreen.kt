@@ -79,7 +79,7 @@ fun PlayingScreen(playerController: PlayerController) {
             var isUserSeeking by remember { mutableStateOf(false) }
 
             var currentPosMs by remember(state.currentTrack) { mutableLongStateOf(playerController.getCurrentPosition()) }
-            val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
             LaunchedEffect(lifecycleOwner, state.isPlaying, state.currentTrack) {
                 if (state.isPlaying) {

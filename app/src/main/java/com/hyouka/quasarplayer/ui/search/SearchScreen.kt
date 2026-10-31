@@ -317,8 +317,8 @@ fun SearchScreen(
                             IconButton(
                                 onClick = {
                                     Toast.makeText(context, "Downloading ${result.title}", Toast.LENGTH_SHORT).show()
-                                    downloader.enqueueDownload(result) { file ->
-                                        if (file != null) {
+                                    downloader.enqueueDownload(result) { success ->
+                                        if (success) {
                                             onLibraryUpdated()
                                         }
                                     }
@@ -346,8 +346,8 @@ fun SearchScreen(
             onDismiss = { previewResult = null },
             onDownloadRequested = { searchRes ->
                 Toast.makeText(context, "Started download for ${searchRes.title}", Toast.LENGTH_SHORT).show()
-                downloader.enqueueDownload(searchRes) { file ->
-                    if (file != null) {
+                downloader.enqueueDownload(searchRes) { success ->
+                    if (success) {
                         onLibraryUpdated()
                     } else {
                         Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()

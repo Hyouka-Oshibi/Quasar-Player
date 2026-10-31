@@ -12,8 +12,8 @@ android {
         applicationId = "com.hyouka.quasarplayer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.8"
+        versionCode = 9
+        versionName = "0.9"
         ndk {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
         }
@@ -47,9 +47,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     packaging {
         resources.excludes.add("META-INF/**")
         jniLibs {
@@ -61,6 +58,10 @@ android {
     lint {
         abortOnError = false
         checkReleaseBuilds = false
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -85,7 +86,6 @@ dependencies {
     // Playback: ExoPlayer + MediaSession
     val media3Version = "1.5.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
-    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
 
     // JSON serialization
@@ -100,5 +100,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
+    testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

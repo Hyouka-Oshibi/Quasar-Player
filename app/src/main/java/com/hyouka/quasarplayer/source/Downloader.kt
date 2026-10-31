@@ -57,16 +57,16 @@ class Downloader(
     private val _activeDownloads = MutableStateFlow<List<DownloadTask>>(emptyList())
     val activeDownloads: StateFlow<List<DownloadTask>> = _activeDownloads.asStateFlow()
 
-    fun enqueueDownload(searchResult: SearchResult, onComplete: ((File?) -> Unit)? = null) {
+    fun enqueueDownload(searchResult: SearchResult, onComplete: ((Boolean) -> Unit)? = null) {
         scope.launch {
-            val file = download(searchResult)
+            val success = download(searchResult)
             withContext(Dispatchers.Main) {
-                onComplete?.invoke(file)
+                onComplete?.invoke(success)
             }
         }
     }
 
-    suspend fun download(searchResult: SearchResult): File? = withContext(Dispatchers.IO) {
+    suspend fun download(searchResult: SearchResult): Boolean = withContext(Dispatchers.IO) {
         val taskId = UUID.randomUUID().toString()
         val initialTask = DownloadTask(id = taskId, title = searchResult.title, progress = 0f)
 
@@ -80,7 +80,7 @@ class Downloader(
                     delay(3000L)
                     _activeDownloads.update { list -> list.filterNot { it.id == taskId } }
                 }
-                return@withContext null
+                return@withContext false
             }
 
             downloadInternal(taskId, streamInfo)
@@ -91,11 +91,11 @@ class Downloader(
                 delay(3000L)
                 _activeDownloads.update { list -> list.filterNot { it.id == taskId } }
             }
-            null
+            false
         }
     }
 
-    suspend fun download(streamInfo: StreamInfo): File? = withContext(Dispatchers.IO) {
+    suspend fun download(streamInfo: StreamInfo): Boolean = withContext(Dispatchers.IO) {
         val taskId = UUID.randomUUID().toString()
         val initialTask = DownloadTask(id = taskId, title = streamInfo.title, progress = 0f)
 
@@ -110,11 +110,11 @@ class Downloader(
                 delay(3000L)
                 _activeDownloads.update { list -> list.filterNot { it.id == taskId } }
             }
-            null
+            false
         }
     }
 
-    private suspend fun downloadInternal(taskId: String, streamInfo: StreamInfo): File? {
+    private suspend fun downloadInternal(taskId: String, streamInfo: StreamInfo): Boolean {
         var sanitizedTitle = streamInfo.title.replace(Regex("[\\\\/:*?\"<>|\\x00]"), "_").trim()
         if (sanitizedTitle.isBlank()) sanitizedTitle = "Unknown Track"
 
@@ -150,7 +150,7 @@ class Downloader(
 
             if (downloadedTempFile == null || !downloadedTempFile.exists()) {
                 updateTaskStatus(taskId, DownloadStatus.FAILED, 0f)
-                return null
+                return false
             }
 
             val candidateUrls = mutableListOf<String>()
@@ -169,24 +169,26 @@ class Downloader(
             for (thumbUrl in candidateUrls.distinct()) {
                 try {
                     val imgReq = Request.Builder().url(thumbUrl).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)").build()
-                    val imgResp = client.newCall(imgReq).execute()
-                    if (imgResp.isSuccessful && imgResp.body != null) {
-                        val rawBytes = imgResp.body!!.bytes()
-                        val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
-                        if (bitmap != null) {
-                            val baos = ByteArrayOutputStream()
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
-                            jpegBytes = baos.toByteArray()
+                    client.newCall(imgReq).execute().use { imgResp ->
+                        if (imgResp.isSuccessful && imgResp.body != null) {
+                            val rawBytes = imgResp.body!!.bytes()
+                            val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                            if (bitmap != null) {
+                                val baos = ByteArrayOutputStream()
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
+                                jpegBytes = baos.toByteArray()
 
-                            val artFile = File(artworkDir, "${UUID.randomUUID()}.jpg")
-                            val artFos = FileOutputStream(artFile)
-                            artFos.write(jpegBytes)
-                            artFos.flush()
-                            artFos.close()
-                            localArtworkFile = artFile
-                            break
+                                val artFile = File(artworkDir, "${UUID.randomUUID()}.jpg")
+                                FileOutputStream(artFile).use { artFos ->
+                                    artFos.write(jpegBytes)
+                                    artFos.flush()
+                                }
+                                localArtworkFile = artFile
+                                return@use
+                            }
                         }
                     }
+                    if (localArtworkFile != null) break
                 } catch (e: Exception) {}
             }
 
@@ -209,11 +211,20 @@ class Downloader(
             }
 
             if (targetDocFile != null) {
-                context.contentResolver.openOutputStream(targetDocFile.uri)?.use { out ->
+                val outStream = try {
+                    context.contentResolver.openOutputStream(targetDocFile.uri, "wt")
+                } catch (_: Exception) {
+                    context.contentResolver.openOutputStream(targetDocFile.uri, "w")
+                }
+                outStream?.use { out ->
                     downloadedTempFile.inputStream().use { input ->
                         input.copyTo(out)
                     }
                 }
+            } else {
+                updateTaskStatus(taskId, DownloadStatus.FAILED, 0f)
+                downloadedTempFile.delete()
+                return false
             }
 
             val actualFileName = targetDocFile?.name ?: fileName
@@ -247,7 +258,7 @@ class Downloader(
                 delay(3000L)
                 _activeDownloads.update { list -> list.filterNot { it.id == taskId } }
             }
-            return if (!libraryRepository.currentMusicFolder.startsWith("content://")) File(targetPath) else null
+            return true
         } catch (e: Exception) {
             e.printStackTrace()
             updateTaskStatus(taskId, DownloadStatus.FAILED, 0f)
@@ -255,7 +266,7 @@ class Downloader(
                 delay(3000L)
                 _activeDownloads.update { list -> list.filterNot { it.id == taskId } }
             }
-            return null
+            return false
         }
     }
 
