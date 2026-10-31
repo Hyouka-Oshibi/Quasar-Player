@@ -176,17 +176,16 @@ class SourceExtractor(private val context: Context) {
 
     private suspend fun nativeYouTubeSearch(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
         val client = okhttp3.OkHttpClient()
-        val jsonBody = """
-            {
-                "context": {
-                    "client": {
-                        "clientName": "WEB",
-                        "clientVersion": "2.20230810.05.00"
-                    }
-                },
-                "query": "$query"
-            }
-        """.trimIndent()
+        val requestPayload = mapOf(
+            "context" to mapOf(
+                "client" to mapOf(
+                    "clientName" to "WEB",
+                    "clientVersion" to "2.20230810.05.00"
+                )
+            ),
+            "query" to query
+        )
+        val jsonBody = moshi.adapter(Map::class.java).toJson(requestPayload)
 
         val request = okhttp3.Request.Builder()
             .url("https://www.youtube.com/youtubei/v1/search?prettyPrint=false")
@@ -204,6 +203,19 @@ class SourceExtractor(private val context: Context) {
             fun findVideoRenderers(node: Any?) {
                 if (results.size >= 20) return
                 if (node is Map<*, *>) {
+                    // Skip shelves, recommendations, shorts shelves, and ads so unrelated trending videos are ignored
+                    if (node.containsKey("shelfRenderer") ||
+                        node.containsKey("reelShelfRenderer") ||
+                        node.containsKey("richShelfRenderer") ||
+                        node.containsKey("horizontalListRenderer") ||
+                        node.containsKey("searchPyvRenderer") ||
+                        node.containsKey("adSlotRenderer") ||
+                        node.containsKey("carouselAdRenderer") ||
+                        node.containsKey("promotedSparklesWebRenderer") ||
+                        node.containsKey("compactPromotedVideoRenderer")) {
+                        return
+                    }
+
                     if (node.containsKey("videoRenderer")) {
                         val renderer = node["videoRenderer"] as? Map<*, *>
                         if (renderer != null) {
@@ -242,8 +254,9 @@ class SourceExtractor(private val context: Context) {
                                 )
                             } catch (e: Exception) {}
                         }
+                    } else {
+                        node.values.forEach { findVideoRenderers(it) }
                     }
-                    node.values.forEach { findVideoRenderers(it) }
                 } else if (node is List<*>) {
                     node.forEach { findVideoRenderers(it) }
                 }

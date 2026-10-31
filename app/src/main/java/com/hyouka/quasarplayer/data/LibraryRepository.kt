@@ -37,6 +37,12 @@ class LibraryRepository(private val context: Context, private val settingsReposi
             prefs.edit { putString("sort_mode", value) }
         }
 
+    var savedSortAscending: Boolean
+        get() = prefs.getBoolean("sort_ascending", false)
+        set(value) {
+            prefs.edit { putBoolean("sort_ascending", value) }
+        }
+
     private val resultsCache = java.util.concurrent.ConcurrentHashMap<Pair<SourceType, String>, List<SearchResult>>()
 
     fun getCachedResults(source: SourceType, query: String): List<SearchResult>? {
@@ -389,16 +395,23 @@ class LibraryRepository(private val context: Context, private val settingsReposi
             if (uri.scheme == "file" || (uri.scheme == null && uri.path?.startsWith("/") == true)) {
                 val path = uri.path ?: uri.toString()
                 val f = File(path)
-                FileOutputStream(f)
+                FileOutputStream(f, false)
             } else {
-                context.contentResolver.openOutputStream(uri)
+                try {
+                    context.contentResolver.openOutputStream(uri, "wt")
+                } catch (_: Exception) {
+                    try {
+                        context.contentResolver.openOutputStream(uri, "rwt")
+                    } catch (_: Exception) {
+                        context.contentResolver.openOutputStream(uri, "w")
+                    }
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
             null
         }
     }
-
     fun listPlaylists(): List<Playlist> {
         val pDir = getPlaylistDirDocument() ?: return emptyList()
         val files = pDir.listFiles().filter { it.name?.endsWith(".m3u") == true }
@@ -473,6 +486,14 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         return toAdd.size
     }
 
+    fun removeTrackFromPlaylist(playlist: Playlist, trackId: String): Boolean {
+        val removed = playlist.trackIds.removeAll { it == trackId }
+        if (removed) {
+            savePlaylist(playlist)
+        }
+        return removed
+    }
+
     fun savePlaylist(playlist: Playlist) {
         val pDir = getPlaylistDirDocument() ?: return
         val cleanName = playlist.name.removeSuffix(".m3u").trim()
@@ -480,6 +501,17 @@ class LibraryRepository(private val context: Context, private val settingsReposi
         val targetFileName = "$sanitizedName.m3u"
         
         var file = pDir.findFile(targetFileName)
+        if (file == null && !playlist.uri.isNullOrEmpty()) {
+            val uri = playlist.uri.toUri()
+            if (uri.scheme == "file" || playlist.uri.startsWith("/")) {
+                val f = File(uri.path ?: playlist.uri)
+                if (f.exists()) file = DocumentFile.fromFile(f)
+            } else if (uri.scheme == "content") {
+                val doc = DocumentFile.fromSingleUri(context, uri)
+                if (doc != null && doc.exists()) file = doc
+            }
+        }
+
         if (file == null) {
             file = pDir.findFile("$targetFileName.m3u")
             if (file != null) {

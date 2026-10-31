@@ -71,6 +71,9 @@ fun LibraryScreen(
             }
         ) 
     }
+    var sortAscending by remember {
+        mutableStateOf(libraryRepository.savedSortAscending)
+    }
 
     var selectedTab by remember { mutableStateOf(LibraryTab.TRACKS) }
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
@@ -114,14 +117,20 @@ fun LibraryScreen(
         refreshLibrary()
     }
 
-    val filteredAndSortedTracks = remember(tracks, searchQuery, sortMode) {
+    val filteredAndSortedTracks = remember(tracks, searchQuery, sortMode, sortAscending) {
         val filtered = if (searchQuery.isBlank()) tracks else tracks.filter {
             it.title.contains(searchQuery, ignoreCase = true) ||
             (it.artist?.contains(searchQuery, ignoreCase = true) == true)
         }
         when (sortMode) {
-            SortMode.DATE_ADDED -> filtered.sortedByDescending { it.lastModified }
-            SortMode.NAME -> filtered.sortedBy { it.title.lowercase() }
+            SortMode.DATE_ADDED -> {
+                if (sortAscending) filtered.sortedBy { it.lastModified }
+                else filtered.sortedByDescending { it.lastModified }
+            }
+            SortMode.NAME -> {
+                if (sortAscending) filtered.sortedBy { it.title.lowercase() }
+                else filtered.sortedByDescending { it.title.lowercase() }
+            }
         }
     }
 
@@ -255,25 +264,48 @@ fun LibraryScreen(
         ) {
             when (selectedTab) {
             LibraryTab.TRACKS -> {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(
-                        onClick = {
-                            sortMode = if (sortMode == SortMode.DATE_ADDED) SortMode.NAME else SortMode.DATE_ADDED
-                            libraryRepository.savedSortMode = sortMode.name
-                        },
-                        modifier = Modifier.fillMaxWidth()
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Sort by: " + if (sortMode == SortMode.DATE_ADDED) "Date Added" else "Name")
-                    }
-                }
+                        OutlinedButton(
+                            onClick = {
+                                sortMode = if (sortMode == SortMode.DATE_ADDED) SortMode.NAME else SortMode.DATE_ADDED
+                                libraryRepository.savedSortMode = sortMode.name
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Sort,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (sortMode == SortMode.DATE_ADDED) "Date Added" else "Name", maxLines = 1)
+                        }
 
-                if (filteredAndSortedTracks.isEmpty()) {
+                        OutlinedButton(
+                            onClick = {
+                                sortAscending = !sortAscending
+                                libraryRepository.savedSortAscending = sortAscending
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                if (sortAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (sortAscending) "Ascending" else "Descending", maxLines = 1)
+                        }
+                    }
+
+                    if (filteredAndSortedTracks.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(if (searchQuery.isBlank()) "No tracks found in Music/QuasarPlayer" else "No matching tracks")
                     }
@@ -341,6 +373,7 @@ fun LibraryScreen(
                         }
                     }
                 }
+                }
             }
 
             LibraryTab.PLAYLISTS -> {
@@ -401,7 +434,7 @@ fun LibraryScreen(
 
     // Playlist Detail & Editing Bottom Sheet
     playlistForDetailSheet?.let { activePlaylist ->
-        var playlistTracks by remember(activePlaylist.trackIds, tracks) {
+        var playlistTracks by remember(activePlaylist.name, activePlaylist.uri) {
             mutableStateOf(activePlaylist.trackIds.distinct().mapNotNull { id -> tracks.find { it.id == id } })
         }
         val totalDurationMs = playlistTracks.sumOf { it.durationMs }
@@ -409,9 +442,12 @@ fun LibraryScreen(
         val subtitleText = if (playlistTracks.isEmpty()) "0 tracks" else "${playlistTracks.size} tracks • $durationText"
 
         val reorderState = rememberReorderableLazyListState(onMove = { from, to ->
-            playlistTracks = playlistTracks.toMutableList().apply {
+            val updated = playlistTracks.toMutableList().apply {
                 add(to.index, removeAt(from.index))
             }
+            playlistTracks = updated
+            activePlaylist.trackIds.clear()
+            activePlaylist.trackIds.addAll(updated.map { it.id }.distinct())
         })
 
         val saveAndDismiss = {
@@ -419,7 +455,10 @@ fun LibraryScreen(
                 activePlaylist.trackIds.clear()
                 activePlaylist.trackIds.addAll(playlistTracks.map { it.id }.distinct())
                 libraryRepository.savePlaylist(activePlaylist)
-                refreshLibrary()
+                val loadedPlaylists = libraryRepository.listPlaylists()
+                withContext(Dispatchers.Main) {
+                    playlists = loadedPlaylists
+                }
             }
             playlistForDetailSheet = null
         }
@@ -515,6 +554,15 @@ fun LibraryScreen(
                                                     val updated = playlistTracks.toMutableList()
                                                     updated.remove(pTrack)
                                                     playlistTracks = updated
+                                                    activePlaylist.trackIds.clear()
+                                                    activePlaylist.trackIds.addAll(updated.map { it.id }.distinct())
+                                                    scope.launch(Dispatchers.IO) {
+                                                        libraryRepository.savePlaylist(activePlaylist)
+                                                        val loadedPlaylists = libraryRepository.listPlaylists()
+                                                        withContext(Dispatchers.Main) {
+                                                            playlists = loadedPlaylists
+                                                        }
+                                                    }
                                                 }
                                             ) {
                                                 Icon(

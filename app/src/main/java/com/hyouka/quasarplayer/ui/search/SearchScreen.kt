@@ -89,6 +89,9 @@ fun SearchScreen(
                     }
                     isSearching = false
                 } else {
+                    if (selectedSource == sourceToSearch && searchQuery.trim() == trimmed) {
+                        searchResults = emptyList()
+                    }
                     val res = sourceExtractor.search(trimmed, sourceToSearch)
                     libraryRepository.setCachedResults(sourceToSearch, trimmed, res)
                     if (selectedSource == sourceToSearch && searchQuery.trim() == trimmed) {
